@@ -23,10 +23,16 @@ const SITES = [
 
 const FILE = "dados.json";
 
-// 📂 histórico
+// 📂 histórico seguro
 function carregarDados() {
   if (!fs.existsSync(FILE)) return [];
-  return JSON.parse(fs.readFileSync(FILE, "utf-8"));
+
+  try {
+    const data = fs.readFileSync(FILE, "utf-8");
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
 }
 
 // 💾 salvar histórico
@@ -34,9 +40,30 @@ function salvarDados(dados) {
   fs.writeFileSync(FILE, JSON.stringify(dados, null, 2));
 }
 
-// 🔑 ID único
+// 🧼 limpar texto (remove lixo do site)
+function limparTexto(texto) {
+  return texto
+    .replace(/\s+/g, " ")
+    .replace(/[\n\r\t]/g, " ")
+    .trim();
+}
+
+// 🔑 ID estável (melhor que base64 simples)
 function gerarId(item) {
-  return `${item.tipo}-${item.texto}`;
+  return item.tipo + "|" + item.texto;
+}
+
+// 🚫 filtrar lixo do site
+function itemValido(texto) {
+  const t = texto.toLowerCase();
+
+  if (texto.length < 15) return false;
+  if (t.includes(".pdf")) return false;
+  if (t.includes("menu")) return false;
+  if (t.includes("download")) return false;
+  if (t.includes("voltar")) return false;
+
+  return true;
 }
 
 // 🧠 função principal
@@ -49,22 +76,27 @@ async function verificar() {
       const $ = cheerio.load(data);
 
       $("a, tr").each((i, el) => {
-        const texto = $(el).text().trim();
+        const texto = limparTexto($(el).text());
         const link = $(el).find("a").attr("href") || "";
 
-        if (!texto) return;
+        if (!texto || !itemValido(texto)) return;
 
-        if (
-          (site.tipo === "Projeto de Lei" &&
-            (texto.includes("Lei") || texto.includes("Projeto"))) ||
-          (site.tipo === "Portaria" &&
-            texto.toLowerCase().includes("portaria"))
-        ) {
+        const tipo = site.tipo;
+
+        const isProjeto =
+          tipo === "Projeto de Lei" &&
+          (texto.includes("Lei") || texto.includes("Projeto"));
+
+        const isPortaria =
+          tipo === "Portaria" &&
+          texto.toLowerCase().includes("portaria");
+
+        if (isProjeto || isPortaria) {
           encontrados.push({
-            tipo: site.tipo,
+            tipo,
             texto,
             link,
-            id: gerarId({ tipo: site.tipo, texto })
+            id: gerarId({ tipo, texto })
           });
         }
       });
@@ -118,8 +150,8 @@ async function criarCard(item) {
   }
 }
 
-// ▶️ executar uma vez (para testes)
-setInterval(verificar, 300000); // 5 minutos
-
-// executa imediatamente ao iniciar
-verificar();
+// ▶️ loop seguro
+(async () => {
+  await verificar();
+  setInterval(verificar, 300000);
+})();
