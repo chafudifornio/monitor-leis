@@ -13,23 +13,23 @@ const LIST_ID = process.env.TRELLO_LIST;
 const SITES = [
   {
     url: "https://www.legislador.com.br/LegisladorWEB.ASP?WCI=ProjetoTramite&ID=32",
-    tipo: "Projeto de Lei"
+    tipo: "Projeto de Lei",
+    base: "https://www.legislador.com.br"
   },
   {
     url: "https://www.camaraesmeraldas.mg.gov.br/downloads/categoria/portarias/32219",
-    tipo: "Portaria"
+    tipo: "Portaria",
+    base: "https://www.camaraesmeraldas.mg.gov.br"
   }
 ];
 
 const FILE = "dados.json";
 
-// 📂 histórico seguro
+// 📂 histórico
 function carregarDados() {
   if (!fs.existsSync(FILE)) return [];
-
   try {
-    const data = fs.readFileSync(FILE, "utf-8");
-    return data ? JSON.parse(data) : [];
+    return JSON.parse(fs.readFileSync(FILE, "utf-8"));
   } catch {
     return [];
   }
@@ -40,20 +40,24 @@ function salvarDados(dados) {
   fs.writeFileSync(FILE, JSON.stringify(dados, null, 2));
 }
 
-// 🧼 limpar texto (remove lixo do site)
+// 🧼 limpar texto
 function limparTexto(texto) {
-  return texto
-    .replace(/\s+/g, " ")
-    .replace(/[\n\r\t]/g, " ")
-    .trim();
+  return texto.replace(/\s+/g, " ").trim();
 }
 
-// 🔑 ID estável (melhor que base64 simples)
+// 🔗 corrigir link relativo
+function normalizarLink(base, link) {
+  if (!link) return "";
+  if (link.startsWith("http")) return link;
+  return base + link;
+}
+
+// 🔑 ID mais confiável (usa link)
 function gerarId(item) {
-  return item.tipo + "|" + item.texto;
+  return item.link || item.texto;
 }
 
-// 🚫 filtrar lixo do site
+// 🚫 filtro de lixo
 function itemValido(texto) {
   const t = texto.toLowerCase();
 
@@ -62,11 +66,12 @@ function itemValido(texto) {
   if (t.includes("menu")) return false;
   if (t.includes("download")) return false;
   if (t.includes("voltar")) return false;
+  if (t.includes("categoria")) return false;
 
   return true;
 }
 
-// 🧠 função principal
+// 🧠 principal
 async function verificar() {
   try {
     let encontrados = [];
@@ -75,30 +80,30 @@ async function verificar() {
       const { data } = await axios.get(site.url);
       const $ = cheerio.load(data);
 
-      $("a, tr").each((i, el) => {
+      $("a").each((i, el) => {
         const texto = limparTexto($(el).text());
-        const link = $(el).find("a").attr("href") || "";
+        const linkRaw = $(el).attr("href") || "";
 
         if (!texto || !itemValido(texto)) return;
 
-        const tipo = site.tipo;
+        const link = normalizarLink(site.base, linkRaw);
 
         const isProjeto =
-          tipo === "Projeto de Lei" &&
+          site.tipo === "Projeto de Lei" &&
           (texto.includes("Lei") || texto.includes("Projeto"));
 
         const isPortaria =
-          tipo === "Portaria" &&
+          site.tipo === "Portaria" &&
           texto.toLowerCase().includes("portaria");
 
-        if (isProjeto || isPortaria) {
-          encontrados.push({
-            tipo,
-            texto,
-            link,
-            id: gerarId({ tipo, texto })
-          });
-        }
+        if (!isProjeto && !isPortaria) return;
+
+        encontrados.push({
+          tipo: site.tipo,
+          texto,
+          link,
+          id: gerarId({ link, texto })
+        });
       });
     }
 
@@ -126,7 +131,7 @@ async function verificar() {
   }
 }
 
-// 🧾 criar card no Trello
+// 🧾 criar card no Trello (COM LINK FORMATADO)
 async function criarCard(item) {
   try {
     const titulo =
@@ -134,13 +139,16 @@ async function criarCard(item) {
         ? "📄 Nova Portaria"
         : "📜 Novo Projeto de Lei";
 
+    const descricao =
+      `${item.texto}\n\n🔗 Link:\n${item.link || "sem link"}`;
+
     await axios.post("https://api.trello.com/1/cards", null, {
       params: {
         key: API_KEY,
         token: TOKEN,
         idList: LIST_ID,
         name: titulo,
-        desc: `${item.texto}\n\n${item.link || ""}`
+        desc: descricao
       }
     });
 
